@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Where Posterior Fossa Society members work</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fira+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  /* Colors from the Society logo: purple #813ACC, sky blue #5CB8EA, near-black #231F20. */
+  :root { --ink: #231F20; --muted: #4A4648; --purple: #813ACC; --sky: #5CB8EA; --sky-tint: #EAF6FD;
+          --rule: #D6E6F0; --paper: #FFFFFF; --font: "Fira Sans", "Segoe UI", system-ui, sans-serif; }
+  html, body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--font); }
+  .page { padding: 0 0 8px; }
+  .stats { display: flex; flex-wrap: wrap; gap: 10px 28px; margin: 0 0 14px; font-size: 1rem; }
+  .stats strong { color: var(--purple); font-size: 1.35rem; margin-right: 4px; }
+  /* Height is set in the script from the width, so the whole world fits once across. */
+  #map { width: 100%; height: 420px; border: 1px solid var(--rule); border-radius: 12px; background: var(--sky-tint); }
+  .leaflet-container { font-family: var(--font); }
+  .leaflet-popup-content { margin: 14px 16px; font-size: 0.92rem; line-height: 1.45; min-width: 200px; }
+  .pop-city { font-weight: 700; font-size: 1rem; margin: 0 0 6px; }
+  .pop-list { margin: 0; padding-left: 18px; }
+  h2 { font-size: 1.05rem; margin: 22px 0 10px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
+  .chips li { padding: 5px 12px; background: var(--sky-tint); border: 1px solid #BFE3F7; border-radius: 999px; font-size: 0.9rem; }
+  .note { margin: 16px 0 0; font-size: 0.85rem; color: var(--muted); line-height: 1.5; }
+</style>
+</head>
+<body>
+<div class="page" id="page">
+  <p class="stats" id="stats"></p>
+  <div id="map" role="region" aria-label="Map of cities where Society members work"></div>
+  <h2>Members work in these countries</h2>
+  <ul class="chips" id="countries"></ul>
+  <p class="note" id="note"></p>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="institutions.js"></script>
+<script>
+/* ======================================================================
+   SETTINGS
+   ====================================================================== */
+const CONFIG = {
+  // CARTO basemap key (same key as the hospital map).
+  cartoKey: "cb1_3vf8_1_82d6acfa82d7f72294c3df2f",
+};
+
+/* ======================================================================
+   MAP
+   ====================================================================== */
+const data = window.PFS_MEMBERSHIP || { cities: [], countries: [], updated: "" };
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+const nInst = data.cities.reduce((n, c) => n + c.institutions.length, 0);
+document.getElementById("stats").innerHTML =
+  `<span><strong>${data.countries.length}</strong>countries</span><span><strong>${nInst}</strong>institutions</span>`;
+document.getElementById("countries").innerHTML = data.countries.map(c => `<li>${esc(c)}</li>`).join("");
+document.getElementById("note").textContent =
+  "Each pin is a city where members work; select one to see the institutions. " +
+  "Membership reflects professional interest in posterior fossa syndrome and is not an endorsement of any institution. " +
+  "Members without an institutional email address are counted in the country list only. Updated " + data.updated + ".";
+
+// One copy of the world only: no repeating edges, no panning past the poles or the date line.
+const WORLD = L.latLngBounds([[-75, -180], [85, 180]]);
+const map = L.map("map", { scrollWheelZoom: false, zoomSnap: 0, zoomDelta: 0.5,
+                           maxBounds: WORLD, maxBoundsViscosity: 1.0 });
+map.on("click focus", () => map.scrollWheelZoom.enable());
+map.on("mouseout blur", () => map.scrollWheelZoom.disable());
+L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png" +
+  (CONFIG.cartoKey ? "?key=" + encodeURIComponent(CONFIG.cartoKey) : ""), {
+  subdomains: "abcd", maxZoom: 18, noWrap: true, bounds: WORLD,
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+}).addTo(map);
+
+// One purple pin per city; bigger when a city has more institutions.
+const pts = [];
+data.cities.forEach(c => {
+  const r = 7 + Math.min(c.institutions.length, 4) * 1.5;
+  L.circleMarker([c.lat, c.lon], { radius: r, color: "#FFFFFF", weight: 2, fillColor: "#813ACC", fillOpacity: 0.9 })
+    .bindPopup(`<p class="pop-city">${esc(c.city)}, ${esc(c.country)}</p><ul class="pop-list">` +
+               c.institutions.map(i => `<li>${esc(i)}</li>`).join("") + "</ul>")
+    .addTo(map);
+  pts.push([c.lat, c.lon]);
+});
+// Fit the world's width exactly to the map's width. A web map is 256 px wide at zoom 0 and doubles
+// with each zoom level, so zoom = log2(width / 256). The height follows the width (about 47%),
+// which shows roughly latitude 72 N to 50 S: every inhabited continent, without the polar edges.
+let lastWidth = 0;
+function fitWorld() {
+  const el = document.getElementById("map");
+  const w = el.clientWidth;
+  if (!w || w === lastWidth) return;
+  lastWidth = w;
+  el.style.height = Math.max(260, Math.round(w * 0.47)) + "px";
+  map.invalidateSize();
+  const z = Math.log2(w / 256);
+  map.setMinZoom(z);
+  map.setView([23, 0], z, { animate: false });
+}
+fitWorld();
+window.addEventListener("resize", fitWorld);
+
+/* ======================================================================
+   EMBEDDING: tell the Squarespace page how tall this page is (same as the hospital map)
+   ====================================================================== */
+const embedded = window.parent !== window;
+function reportHeight() {
+  if (embedded) window.parent.postMessage({ type: "pfs-map-height",
+    height: Math.ceil(document.getElementById("page").getBoundingClientRect().height) }, "*");
+}
+new ResizeObserver(reportHeight).observe(document.getElementById("page"));
+window.addEventListener("load", reportHeight);
+new ResizeObserver(() => { map.invalidateSize(); fitWorld(); }).observe(document.getElementById("map"));
+</script>
+</body>
+</html>
